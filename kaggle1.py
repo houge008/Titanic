@@ -5,9 +5,9 @@ Created on Thu Dec  6 10:38:56 2018
 是否有cabin等条件与生还的关系分析
 @author: Hou dongjie
 """
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import pandas as pd #数据分析
+import numpy as np #科学计算
+import matplotlib.pyplot as plt #可视化
 from pandas import Series,DataFrame
 """
 0 step:数据读取
@@ -162,4 +162,129 @@ plt.show()
 """
 3 step:特征工程，数据预处理
 """
+#使用scikit-learn中的RandomForest拟合补充确实的年龄数据
+from sklearn.ensemble import RandomForestRegressor
+def set_missing_ages(df):
+    #将已经有的数值特征选取出来，放进RandomForestRegressor中
+    age_df = df[['Age','Fare','Parch','SibSp','Pclass']]
+    #乘客分成已知年龄和位置年龄两部分
+    known_age = age_df[age_df.Age.notnull()].as_matrix()
+    unknown_age = age_df[age_df.Age.isnull()].as_matrix()
+    
+    # make y 目标年龄
+    y = known_age[:,0]
+    # make X 特征属性值
+    X = known_age[:,1:]
+    #建立model,then fit
+    rfr = RandomForestRegressor(random_state=0,n_estimators=2000,n_jobs=-1)
+    rfr.fit(X,y)
+    
+    #用训练的模型进行位置年龄预测
+    predictedAges = rfr.predict(unknown_age[:,1::])
+    #用预测的结果补充确实年龄数据
+    df.loc[(df.Age.isnull()),'Age'] = predictedAges
+    return df,rfr
+def set_Cabin_type(df):
+    df.loc[(df.Cabin.notnull()),'Cabin'] = 'yes'
+    df.loc[(df.Cabin.isnull()),'Cabin'] = 'No'
+    return df
+data_train,rfr = set_missing_ages(data_train)
+data_train = set_Cabin_type(data_train)
+print(data_train)
+
+"""
+逻辑回归建模时，需要输入的特征为0、1二元数值，通常需要对类目类型二值化、因子化
+以Cabin为例，原本一个属性维度，因为其取值为【yes,no】，而将其平展开为‘Cabin_yes'
+'Cabin_no'两个属性，原本cabin为yes,在Cabin_yes下取值为1；原本在Cabin下为0，则在
+Cabin_no下为1。其他情况为0.使用pandas的get_dummies实现，拼接在原来的data_train上
+"""
+dummies_Cabin = pd.get_dummies(data_train['Cabin'],prefix='Cabin')
+dummies_Embarked = pd.get_dummies(data_train['Embarked'],prefix='Embarked')
+dummies_Sex = pd.get_dummies(data_train['Sex'], prefix= 'Sex')
+dummies_Pclass = pd.get_dummies(data_train['Pclass'], prefix= 'Pclass')
+
+df = pd.concat([data_train, dummies_Cabin, dummies_Embarked, dummies_Sex, dummies_Pclass], axis=1)
+df.drop(['Pclass', 'Name', 'Sex', 'Ticket', 'Cabin', 'Embarked'], axis=1, inplace=True)
+print(df)
+
+"""
+细看看Age和Fare数值浮动大，将对逻辑回归或者梯度下降算法造成速度慢或者不收敛，
+要通过sklearn的preprocessing模块进行scaling,也就是特征化到[-1,1]之间,置于表后
+"""
+import sklearn.preprocessing as preprocessing
+scaler = preprocessing.StandardScaler()
+age_scale_param = scaler.fit(df['Age'].values.reshape(-1,1))
+df['Age_scaled'] = scaler.fit_transform(df['Age'].values.reshape(-1,1),age_scale_param)
+fare_scale_param = scaler.fit(df['Fare'].values.reshape(-1,1))
+df['Fare_scaled'] = scaler.fit_transform(df['Fare'].values.reshape(-1,1), fare_scale_param)
+print(df)
+
+"""
+4. 万事俱备，开始建模
+我们把需要的feature字段取出来，转成numpy格式，
+使用scikit-learn中的LogisticRegression建模
+""" 
+from sklearn import linear_model
+#用正则取取出我们要的属性值
+train_df = df.filter(regex='Survived|Age_.*|SibSp|Parch|Fare_.*|Cabin_.*|Embarked_.*|Sex_.*|Pcalss_.*')
+train_np = train_df.as_matrix()
+
+#y即第0列：Survival结果
+y = train_np[:,0]
+#X即第一列及其以后：其特征属性值
+X = train_np[:,1:]
+
+#fit到logisticRegression之中
+clf = linear_model.LogisticRegression(C=1.0,penalty='l1',tol=1e-6)
+clf.fit(X,y)
+print(clf)  #训练出一个模型
+
+"""
+对test_data做预处理
+"""
+data_test = pd.read_csv('test.csv')
+data_test.loc[ (data_test.Fare.isnull()), 'Fare' ] = 0
+# 接着我们对test_data做和train_data中一致的特征变换
+# 首先用同样的RandomForestRegressor模型填上丢失的年龄
+tmp_df = data_test[['Age','Fare', 'Parch', 'SibSp', 'Pclass']]
+null_age = tmp_df[data_test.Age.isnull()].as_matrix()
+# 根据特征属性X预测年龄并补上
+X = null_age[:, 1:]
+predictedAges = rfr.predict(X)
+data_test.loc[ (data_test.Age.isnull()), 'Age' ] = predictedAges
+
+data_test = set_Cabin_type(data_test)
+dummies_Cabin = pd.get_dummies(data_test['Cabin'], prefix= 'Cabin')
+dummies_Embarked = pd.get_dummies(data_test['Embarked'], prefix= 'Embarked')
+dummies_Sex = pd.get_dummies(data_test['Sex'], prefix= 'Sex')
+dummies_Pclass = pd.get_dummies(data_test['Pclass'], prefix= 'Pclass')
+
+
+df_test = pd.concat([data_test, dummies_Cabin, dummies_Embarked, dummies_Sex, dummies_Pclass], axis=1)
+#df_test.drop(['Pclass', 'Name', 'Sex', 'Ticket', 'Cabin', 'Embarked'], axis=1, inplace=True)
+df_test.drop(['Pclass', 'Name', 'Sex', 'Ticket', 'Cabin', 'Embarked'], axis=1, inplace=True)
+
+
+age_scale_param1 = scaler.fit(df_test['Age'].values.reshape(-1,1))
+df_test['Age_scaled'] = scaler.fit_transform(df_test['Age'].values.reshape(-1,1), age_scale_param1)
+fare_scale_param1 = scaler.fit(df_test['Fare'].values.reshape(-1,1))
+df_test['Fare_scaled'] = scaler.fit_transform(df_test['Fare'].values.reshape(-1,1), fare_scale_param1)
+
+print("df_test:",df_test)
+
+"""
+做初步预测，make a submission
+"""
+test1 = df_test.filter(regex='Age_.*|SibSp|Parch|Fare_.*|Cabin_.*|Embarked_.*|Sex_.*|Pclass_.*')
+test_np = test1.as_matrix()
+X1 = test_np[:,0:] ###??????????????特征列14》》》》11
+predictions = clf.predict(X1)
+result = pd.DataFrame({'PassengerId':data_test['PassengerId'].as_matrix(), 'Survived':predictions.astype(np.int32)})
+result.to_csv("logistic_regression_predictions.csv", index=False)
+              
+pd1=pd.read_csv("logistic_regression_predictions.csv")
+print(pd1)
+
+
+
 
